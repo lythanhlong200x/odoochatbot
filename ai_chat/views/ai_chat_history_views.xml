@@ -1,0 +1,47 @@
+<odoo>
+  <!-- list view for AI Chat History -->
+  <record id="view_ai_chat_history_list" model="ir.ui.view">
+    <field name="name">ai.chat.history.list</field>
+    <field name="model">ai.chat.history</field>
+    <field name="arch" type="xml">
+      <list string="Chat History">
+        <field name="date"/>
+        <field name="user_id"/>
+        <field name="message"/>
+        <field name="response"/>
+      </list>
+    </field>
+  </record>
+
+  <!-- Form view for AI Chat History -->
+  <record id="view_ai_chat_history_form" model="ir.ui.view">
+    <field name="name">ai.chat.history.form</field>
+    <field name="model">ai.chat.history</field>
+    <field name="arch" type="xml">
+      <form string="Chat History">
+        <sheet>
+          <group>
+            <field name="user_id"/>
+            <field name="date"/>
+          </group>
+          <group>
+            <field name="message" nolabel="1"/>
+          </group>
+          <group>
+            <field name="response" nolabel="1"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- Action to open the Chat History view for the current user -->
+  <record id="action_ai_chat_history" model="ir.actions.act_window">
+    <field name="name">Chat History</field>
+    <field name="res_model">ai.chat.history</field>
+    <field name="view_mode">list,form</field>
+    <field name="domain">[('user_id', '=', uid)]</field>
+  </record>
+   <menuitem id="menu_ai_chat_history" name="Chat History"
+             action="action_ai_chat_history" sequence="10" parent="sale.sale_order_menu"/>
+</odoo>
