@@ -1,6 +1,6 @@
 # region imports 
 import warnings
-
+import json
 from odoo import fields
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -18,10 +18,19 @@ import requests
 
 def is_sales_order_request(message):
     # Kiểm tra xem câu hỏi có chứa từ khóa liên quan đến tạo đơn không.
-    keywords = ["sale order", "đặt đơn", "tạo đơn", "order"]
+    keywords = ["sale order", "đặt đơn bán", "tạo đơn bán"," order bán"]
     pattern = re.compile("|".join(keywords), re.IGNORECASE)
     return bool(pattern.search(message))
 
+
+def is_purchase_order_request(message):
+    """
+    Kiểm tra xem câu hỏi có liên quan đến việc tạo Purchase Order không.
+    """
+    # Các từ khóa liên quan đến Purchase Order
+    keywords = ["purchase order", "đặt đơn mua", "tạo đơn mua", "order mua"]
+    pattern = re.compile("|".join(keywords), re.IGNORECASE)
+    return bool(pattern.search(message))
 
 def build_prompt(message):
     print("this was called")
@@ -30,9 +39,9 @@ def build_prompt(message):
             "[SalesOrder Instruction]\n"
             "When the user's request is to create a sales order, please respond ONLY with a JSON object in the following format (do not include any extra text):\n"
             "{\n"
-            '  "customer_id": <integer>,\n'
-            '  "product_ids": [<integer>, ...],\n'
-            '  "quantities": [<integer>, ...]\n'
+            '  "customer_id": <customer_name>,\n'
+            '  "product_ids":["<product_name1>", "<product_name2>", ...],\n'
+            '  "quantities": [<quantity1>, <quantity2>, ...]\n'
             "}\n"
             "If the request is not about creating a sales order, ignore this instruction and answer normally.\n"
             "[/SalesOrder Instruction]\n\n"
@@ -41,6 +50,35 @@ def build_prompt(message):
     else:
         return message
 # endregion
+def process_order_response(response_text):
+    print(f"Response text: {response_text}")  # In ra toàn bộ response
+    try:
+        # Trích xuất phần 'text' trong response (cleaning)
+        if isinstance(response_text, dict):
+            response_text = response_text.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get(
+                'text', '')
+
+        print(f"Cleaned response text: {response_text}")  # In ra text đã được làm sạch
+
+        # Loại bỏ markdown ` ```json` và ` ``` `
+        cleaned_text = response_text.replace('```json\n', '').replace('```', '')
+
+        # Parse chuỗi JSON đã làm sạch
+        data = json.loads(cleaned_text)
+        print(f"Parsed data: {data}")  # In ra dữ liệu JSON đã parse
+
+        # Kiểm tra nếu tất cả các key cần thiết có mặt
+        if all(k in data for k in ("customer_id", "product_ids", "quantities")):
+            # Kiểm tra nếu customer_id và product_ids hợp lệ
+            if data["customer_id"] is None or not data["product_ids"]:
+                print("Invalid customer_id or product_ids")
+                return None  # Trả về None nếu dữ liệu không hợp lệ
+            return data
+    except Exception as e:
+        print(f"Error processing sales order response: {e}")
+        pass
+    return None
+
 
 class AiBot:
     AGENT_NAME = "odoo_ai_bot"
@@ -77,7 +115,7 @@ class AiBot:
         headers = {
             "Content-Type": "application/json"
         }
-        hidden_instruction = "Trả lời ngắn gọn, không vượt quá 512 token. (liên quan đến Odoo).\n"
+        hidden_instruction = "Short message, not over 512 tokens (refer to Odoo).\n"
         max_messages = 6
         recent_history = history[-max_messages:] if len(history) > max_messages else history
 
@@ -107,8 +145,28 @@ class AiBot:
         }
         try:
             response = requests.post(self.gemini_endpoint, headers=headers, json=payload)
+
             response.raise_for_status()
             data = response.json()
+            if is_sales_order_request(message):
+                sales_order_params = process_order_response(data)
+                if sales_order_params:
+                    order_result = self.create_sales_order(
+                        sales_order_params["customer_id"],
+                        sales_order_params["product_ids"],
+                        sales_order_params["quantities"],
+                        order_type="sale"
+                    )
+            elif is_purchase_order_request(message):
+                # Xử lý tạo Purchase Order
+                purchase_order_params = process_order_response(data)
+                if purchase_order_params:
+                    order_result = self.create_purchase_order(
+                        purchase_order_params["supplier_name"],
+                        purchase_order_params["product_names"],
+                        purchase_order_params["quantities"]
+                    )
+
             if "candidates" in data and len(data["candidates"]) > 0:
                 candidate = data["candidates"][0]
                 if "content" in candidate and "parts" in candidate["content"] and len(
@@ -143,6 +201,76 @@ class AiBot:
         else:
             res = self.run_async_function(self._chat, message, history)
         return res
+
+    def get_record_by_name(self, model, field_name, search_value):
+        """
+        Tìm kiếm bất kỳ bản ghi nào trong Odoo theo tên gần đúng.
+        """
+        record = self.env[model].sudo().search([(field_name, 'ilike', search_value)], limit=1)
+        if record:
+            print(record)
+            return record
+        else:
+            print(f"{model} '{search_value}' not found.")
+            return None
+
+    # def get_customer_by_name(self, customer_name):
+    #     """
+    #     Tìm khách hàng theo tên trong Odoo.
+    #     """
+    #     customer = self.env['res.partner'].sudo().search([('name', 'ilike', customer_name)], limit=1)
+    #     print(customer)
+    #     if customer:
+    #         return customer
+    #     else:
+    #         return None
+    #
+    # def get_product_by_name(self, product_name):
+    #     """
+    #     Tìm sản phẩm theo tên trong Odoo.
+    #     """
+    #     product = self.env['product.product'].sudo().search([('name', 'ilike', product_name)], limit=1)
+    #     print(product)
+    #     if product:
+    #         return product
+    #     else:
+    #         return None
+
+    def create_sales_order(self, customer_name, product_names, quantities, order_type):
+        """
+        Tạo Sales Order với dữ liệu khách hàng (theo tên) và sản phẩm (theo tên).
+        """
+        try:
+            # Tìm khách hàng theo tên
+            customer = self.get_record_by_name("res.partner", "name", customer_name)
+            if not customer:
+                print("Customer not found")
+                return "Customer not found"
+            order_model = "sale.order" if order_type == "sale" else "purchase.order"
+            order = self.env[order_model].sudo().create({
+                'partner_id': customer.id,
+            })
+            # Tìm và thêm sản phẩm vào order
+            order_lines = []
+            for prod_name, qty in zip(product_names, quantities):
+                product = self.get_record_by_name("product.product", "name", prod_name)
+                if not product:
+                    print(f"Product '{prod_name}' not found")
+                    return f"Product '{prod_name}' not found"
+                order_lines.append((0, 0, {
+                    'product_id': product.id,
+                    'product_uom_qty': qty,
+                }))
+
+            # Ghi lại các dòng đơn hàng vào đơn hàng
+            order.write({'order_line': order_lines})
+            return f"Sales Order created with ID: {order.id}"
+        except Exception as e:
+            print(f"Error creating sales order: {e}")
+            return f"Error: {e}"
+
+    def create_purchase_order(self, supplier_name, product_names, quantities):
+        return self.create_sales_order(supplier_name, product_names, quantities, order_type="purchase")
 
     def run_async_function(self, func_to_run, *args):
         new_loop = asyncio.new_event_loop()
