@@ -14,7 +14,17 @@ import asyncio
 from odoo.api import Environment
 from odoo.modules.registry import Registry
 import requests
+import joblib
 
+# Tải mô hình đã huấn luyện
+model = joblib.load('custom_modules/ai_chat/static/data/sales_purchase_classifier.pkl')
+
+def predict_order_type(message):
+    """
+    Dự đoán loại đơn hàng từ câu hỏi của người dùng.
+    """
+    prediction = model.predict([message])
+    return prediction[0]
 
 def is_sales_order_request(message):
     # Kiểm tra xem câu hỏi có chứa từ khóa liên quan đến tạo đơn không.
@@ -148,7 +158,9 @@ class AiBot:
 
             response.raise_for_status()
             data = response.json()
-            if is_sales_order_request(message):
+            order_type = predict_order_type(message)
+
+            if order_type == "Sales Order":
                 sales_order_params = process_order_response(data)
                 if sales_order_params:
                     order_result = self.create_sales_order(
@@ -157,7 +169,7 @@ class AiBot:
                         sales_order_params["quantities"],
                         order_type="sale"
                     )
-            elif is_purchase_order_request(message):
+            elif order_type == "Purchase Order":
                 # Xử lý tạo Purchase Order
                 purchase_order_params = process_order_response(data)
                 if purchase_order_params:
