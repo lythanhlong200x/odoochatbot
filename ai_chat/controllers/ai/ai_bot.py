@@ -14,10 +14,14 @@ import asyncio
 from odoo.api import Environment
 from odoo.modules.registry import Registry
 import requests
+import os
 import joblib
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PKL_PATH = os.path.join(BASE_DIR, "static", "data", "sales_purchase_classifier.pkl")
 
+print("Đang load file tại:", PKL_PATH)
 # Tải mô hình đã huấn luyện
-model = joblib.load('custom_modules/ai_chat/static/data/sales_purchase_classifier.pkl')
+model = joblib.load(PKL_PATH)
 
 def predict_order_type(message):
     """
