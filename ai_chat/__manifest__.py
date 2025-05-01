@@ -15,7 +15,7 @@
         ],
     },
     'data': [
-        'views/ai_chat_history_views.xml',
+        # 'views/ai_chat_history_views.xml',
         'security/ir.model.access.csv',
     ],
     "application": False,
