@@ -33,9 +33,9 @@ def predict_order_type(message):
 def build_prompt(message):
     print("build_prompt was called")
 
-    order_type = predict_order_type(message)
+    intent = predict_order_type(message)
 
-    if order_type == "create_sales_order":
+    if intent == "create_sales_order":
         hidden_instruction = (
             "You are an Odoo assistant.\n"
             "If the user wants to create a Sales Order, respond ONLY with a JSON in this format:\n"
@@ -50,7 +50,7 @@ def build_prompt(message):
         )
         return hidden_instruction + message
 
-    elif order_type == "create_purchase_order":
+    elif intent == "create_purchase_order":
         hidden_instruction = (
             "You are an Odoo assistant.\n"
             "If the user wants to create a Purchase Order, respond ONLY with a JSON in this format:\n"
@@ -64,29 +64,32 @@ def build_prompt(message):
             "If the user's request is not about purchase order, answer normally.\n\n"
         )
         return hidden_instruction + message
-    elif order_type == "check_stock":
+    elif intent == "check_stock":
         hidden_instruction = (
             "You are an Odoo assistant.\n"
             "If the user is asking to check product stock or inventory, respond ONLY with the product name they want to check.\n"
-            "For example:\n"
-            "\"FRISOLAC 1 400G\"\n"
             "Return only the clean product name. No explanation, no markdown, no JSON.\n"
             "If multiple products are mentioned, just return the main one.\n"
         )
         return hidden_instruction + message
-    elif order_type == "find_order":
+    elif intent == "find_by_number":
         hidden_instruction = (
             "You are an Odoo assistant.\n"
-            "If the user wants to find or review an order, return ONLY the order number or customer name used to search.\n"
-            "Examples:\n"
-            "\"S00025\"\n"
-            "or\n"
-            "\"PLUS ONE CONFINEMENT CENTRE\"\n"
-            "No other formatting, no markdown, just return the search keyword.\n"
-            "Do not explain anything.\n"
+            "The user wants to search for an order by its number.\n"
+            "Return ONLY valid JSON like this:\n"
+            "{\"model\": \"sale.order\",\"order_number\": \"S00025\"}\n"
+            "No explanation. No formatting. No markdown.\n"
         )
         return hidden_instruction + message
-
+    if intent == "find_by_partner":
+        hidden_instruction = (
+            "You are an Odoo assistant.\n"
+            "The user wants to search for orders by customer name.\n"
+            "Return ONLY valid JSON like this:\n"
+            "{\"model\": \"sale.order\",\"partner\": \"PLUS ONE CONFINEMENT CENTRE\"}\n"
+            "No explanation. No formatting. No markdown.\n"
+        )
+        return hidden_instruction + message
     else:
         return message
 
@@ -259,24 +262,58 @@ class AiBot:
                     )
             elif intent == "check_stock":
                 return self.check_product_stock(keyword)
-            if intent == "find_by_number":
-                return (
-                        "[FindByNumber]\n"
-                        "Return ONLY JSON: {\"model\": \"sale.order\" or \"purchase.order\", \"order_number\": \"S00032\"}\n"
-                        "[/FindByNumber]\n" + message
-                )
+            elif intent == "find_by_number":
+                print("find_by_number was called")
+                try:
+                    # Tải dữ liệu JSON từ response đã được "clean"
+                    cleaned_text = clean_response_text(data)
+                      # Debug xem dữ liệu trả về có đúng định dạng không
+                    cleaned_text = cleaned_text.replace("{", "{\"").replace("}", "\"}").replace(": ", "\": \"").replace(
+                        ",", "\",\"")
+
+                    # Loại bỏ khoảng trắng thừa trong các khóa
+                    cleaned_text = cleaned_text.replace(" \"", "\"")  # Loại bỏ khoảng trắng giữa dấu ngoặc kép và khóa
+
+                    # Parse dữ liệu JSON
+                    print("Cleaned JSON:", repr(cleaned_text))
+                    keyword_data = json.loads(cleaned_text)
+                    print(keyword_data)
+                    model = keyword_data.get("model")
+                    order_number = keyword_data.get("order_number")
+                    print(model, order_number)
+                    if model and order_number:
+                        return self.find_by_number(model, order_number)
+                    else:
+                        return "Missing model or order number in response."
+                except json.JSONDecodeError as e:
+                    return f"Failed to parse find_by_number data: Invalid JSON format. Error: {e}"
+                except Exception as e:
+                    return f"Failed to parse find_by_number data: {e}"
+
             elif intent == "find_by_partner":
-                return (
-                        "[FindByPartner]\n"
-                        "Return ONLY JSON: {\"model\": \"sale.order\", \"partner\": \"Customer Name\"}\n"
-                        "[/FindByPartner]\n" + message
-                )
-            elif intent == "list_recent":
-                return (
-                        "[ListRecent]\n"
-                        "Return ONLY JSON: {\"model\": \"sale.order\", \"limit\": 5}\n"
-                        "[/ListRecent]\n" + message
-                )
+                print("find_by_partner was called")
+                try:
+                    # Tải dữ liệu JSON từ response đã được "clean"
+                    cleaned_text = clean_response_text(data)
+                    cleaned_text = cleaned_text.replace("{", "{\"").replace("}", "\"}").replace(": ", "\": \"").replace(
+                        ",", "\",\"")
+                    print("Cleaned JSON:", repr(cleaned_text))  # Debug xem dữ liệu trả về có đúng định dạng không
+
+                    # Parse dữ liệu JSON
+                    keyword_data = json.loads(cleaned_text)
+
+                    model = keyword_data.get("model")
+                    partner_name = keyword_data.get("partner")
+
+                    if model and partner_name:
+                        return self.find_by_partner(model, partner_name)
+                    else:
+                        return "Missing model or partner name in response."
+                except json.JSONDecodeError as e:
+                    return f"Failed to parse find_by_partner data: Invalid JSON format. Error: {e}"
+                except Exception as e:
+                    return f"Failed to parse find_by_partner data: {e}"
+
             if "candidates" in data and len(data["candidates"]) > 0:
                 candidate = data["candidates"][0]
                 if "content" in candidate and "parts" in candidate["content"] and len(
@@ -370,7 +407,6 @@ class AiBot:
             return f"Error: {e}"
 
     def create_purchase_order(self, supplier_name, product_names, quantities):
-        print("caleddddddddddddddddddddddddddddddddddddddd")
         return self.create_sales_order(supplier_name, product_names, quantities, order_type="purchase")
 
     def check_product_stock(self, product_name):
@@ -400,22 +436,36 @@ class AiBot:
         Order = self.env[model].sudo()
         rec = Order.search([("name", "=", number)], limit=1)
         if not rec:
-            return f"No order {number} found."
-        return f"{rec.name}: Customer={rec.partner_id.name}, Total={rec.amount_total:.2f}, Status={rec.state}"
+            return f"❌ No order found with number: {number}"
+
+        return (
+                f"📦 Order: {rec.name}\n"
+                f"👤 Customer: {rec.partner_id.name}\n"
+                f"🗓️ Date: {rec.date_order.strftime('%Y-%m-%d %H:%M') if rec.date_order else 'N/A'}\n"
+                f"💰 Total: {rec.amount_total:.2f} {rec.currency_id.name}\n"
+                f"📌 Status: {rec.state}\n"
+                f"🛒 Products:\n" +
+                "\n".join(
+                    f"  - {line.product_id.display_name} x {line.product_uom_qty} ({line.price_unit:.2f} {rec.currency_id.name}/unit)"
+                    for line in rec.order_line
+                )
+        )
 
     def find_by_partner(self, model, partner_name):
         Order = self.env[model].sudo()
-        recs = Order.search([("partner_id.name", "ilike", partner_name)], limit=10)
+        recs = Order.search([("partner_id.name", "ilike", partner_name)], order="date_order desc", limit=10)
         if not recs:
-            return f"No orders for {partner_name}."
-        return "\n".join(f"- {r.name} ({r.state}): {r.amount_total:.2f}" for r in recs)
+            return f"❌ No orders found for partner: {partner_name}"
 
-    def list_recent(self, model, limit):
-        Order = self.env[model].sudo()
-        recs = Order.search([], order="date_order desc", limit=limit)
-        if not recs:
-            return "No recent orders."
-        return "\n".join(f"- {r.name} ({r.state}): {r.amount_total:.2f}" for r in recs)
+        result = f"📋 Latest orders for '{partner_name}':\n"
+        for r in recs:
+            result += (
+                f"\n🔹 Order: {r.name}\n"
+                f"   🗓️ Date: {r.date_order.strftime('%Y-%m-%d') if r.date_order else 'N/A'}\n"
+                f"   💰 Total: {r.amount_total:.2f} {r.currency_id.name}\n"
+                f"   📌 Status: {r.state}\n"
+            )
+        return result
     def run_async_function(self, func_to_run, *args):
         new_loop = asyncio.new_event_loop()
         try:

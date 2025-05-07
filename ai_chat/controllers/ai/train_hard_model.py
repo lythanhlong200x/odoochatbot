@@ -2,25 +2,23 @@
 
 import numpy as np
 import joblib
+import re
+import os
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
-from sklearn.svm import LinearSVC
-from sklearn.metrics import classification_report
-import os
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, accuracy_score
 
 # 1. Define labeled data (extend as needed)
 data = [
     ("Create a sales order for customer X with products A and B", "create_sales_order"),
-    ("I want to place a sales order for customer Y with products C and D", "create_sales_order"),
     ("Create a purchase order with supplier Z for product E", "create_purchase_order"),
     ("Place a purchase order with supplier W for products F and G", "create_purchase_order"),
     ("How many units of FRISOLAC are in stock?", "check_stock"),
-    ("Please create a new purchase order", "create_purchase_order"),
     ("Order items from supplier M with quantity 5 of product J", "create_purchase_order"),
-    ("Can you help me create a sales order for customer L?", "create_sales_order"),
     ("Sales order for customer A with products T and U", "create_sales_order"),
     ("Purchase order with supplier B for products V, W", "create_purchase_order"),
     ("Order product M for customer O", "create_sales_order"),
@@ -30,16 +28,10 @@ data = [
     ("How much inventory do we have for product XYZ?", "check_stock"),
     ("Generate a purchase order for 20 chairs for supplier DEF", "create_purchase_order"),
     ("Create a sales order for 5 items of product GHI", "create_sales_order"),
-    ("Do we still have FRISOLAC in stock?", "check_stock"),
     ("How many units are left of product A?", "check_stock"),
     ("Check inventory for product ABC", "check_stock"),
-    ("I want to see current stock for product B", "check_stock"),
     ("What is the available quantity of FRISO?", "check_stock"),
-    ("Is product X still in stock?", "check_stock"),
-    ("Show me inventory level for 'baby milk'", "check_stock"),
-    ("Get me stock status of Glico ICREO", "check_stock"),
     ("Check how much of product X is in warehouse", "check_stock"),
-    ("How much stock do we have for each product?", "check_stock"),
     ("Create a sales order for customer ABC with 5 boxes of FRISO", "create_sales_order"),
     ("I want to place a sales order", "create_sales_order"),
     ("Can you help me create an SO?", "create_sales_order"),
@@ -49,7 +41,6 @@ data = [
     ("Sales order: customer Y needs 2 cases of milk", "create_sales_order"),
     ("Register new sales order for 'PLUS ONE'", "create_sales_order"),
     ("Place an order to sell 15 items of ABC", "create_sales_order"),
-    ("Generate a sales invoice for FRISOLAC", "create_sales_order"),
     ("Create a purchase order from supplier M&B", "create_purchase_order"),
     ("Order 100 bottles of hand sanitizer from supplier XYZ", "create_purchase_order"),
     ("Place a PO for 20 units of product DEF", "create_purchase_order"),
@@ -59,15 +50,89 @@ data = [
     ("I need to restock product P by ordering from vendor V", "create_purchase_order"),
     ("Send PO to supplier for 100 face masks", "create_purchase_order"),
     ("Check the status of sales order S00032", "find_by_number"),
+    ("Check the status of sales order S00032", "find_by_number"),
     ("What is the status of PO00018?", "find_by_number"),
     ("Find sales order S00045 for me", "find_by_number"),
+    ("Show details for order number PO123456", "find_by_number"),
+    ("Get information about sales order SO_2023_1234", "find_by_number"),
 
-    ("Show me all orders for customer X", "find_by_partner"),
-    ("List purchase orders for supplier ABC", "find_by_partner"),
+    # find_by_partner samples
+    ("List all orders from supplier ABC Corp", "find_by_partner"),
+    ("Show purchase orders for vendor XYZ", "find_by_partner"),
+    ("Find orders for customer John Doe", "find_by_partner"),
+    ("Display sales orders for Glico company", "find_by_partner"),
+    ("Where is the settings?", "navigate_help"),
+    ("How do I open product page?", "navigate_help"),
+    ("Can I automate tasks in Odoo?", "general_question"),
+    ("What is the Sales module?", "navigate_help"),
+    ("Is there an AI assistant for Odoo?", "general_question"),
+    ("Can Odoo be used on mobile?", "general_question"),
+    ("Is Odoo open source?", "general_question"),
+    ("Who built Odoo?", "general_question"),
+    ("Can I integrate Odoo with Gmail?", "general_question"),
+    ("How much does Odoo cost?", "general_question"),
+    ("Is Odoo suitable for small businesses?", "general_question"),
+    ("How do I get to the Purchase Order module?", "navigate_help"),
+    ("Where can I find the inventory dashboard?", "navigate_help"),
+    ("Guide me to the Reporting section", "navigate_help"),
+    ("Open the Sales menu", "navigate_help"),
+    ("I need help finding the product list", "navigate_help"),
+    ("Show me how to navigate to customers", "navigate_help"),
+    ("What's the weather like today?", "irrelevant_question"),
+    ("Tell me a joke", "irrelevant_question"),
+    ("How tall is Mount Everest?", "irrelevant_question"),
+    ("Translate 'hello' to French", "irrelevant_question"),
+    ("Play some music", "irrelevant_question"),
+    ("Look up sales order S00231", "find_by_number"),
+    ("I want the details of PO000123", "find_by_number"),
+    ("Search for order number SO000789", "find_by_number"),
+    ("Retrieve info on sales order SO_321", "find_by_number"),
+    ("Find me purchase order number PO999", "find_by_number"),
+    ("Track status of SO1123", "find_by_number"),
+    ("Show details for order S09999", "find_by_number"),
+    ("Check PO00045 for status", "find_by_number"),
+    ("Order SO1001, what’s its status?", "find_by_number"),
+    ("What's happening with sales order S000999?", "find_by_number"),
 
-    ("List my last 5 sales orders", "list_recent"),
-    ("Show me the 10 most recent purchase orders", "list_recent"),
-    ("Give me the last 3 orders", "list_recent"),
+    # irrelevant_question
+    ("What's 2 plus 2?", "irrelevant_question"),
+    ("Who is the president of France?", "irrelevant_question"),
+    ("Tell me a fun fact", "irrelevant_question"),
+    ("Recommend me a movie", "irrelevant_question"),
+    ("Sing a song", "irrelevant_question"),
+    ("What time is it?", "irrelevant_question"),
+    ("Define artificial intelligence", "irrelevant_question"),
+    ("How do airplanes fly?", "irrelevant_question"),
+    ("Where is Paris?", "irrelevant_question"),
+    ("What’s 5 squared?", "irrelevant_question"),
+
+    # navigate_help
+    ("Guide me to the settings page", "navigate_help"),
+    ("Open Inventory module", "navigate_help"),
+    ("Navigate to Sales", "navigate_help"),
+    ("How do I go to the Reporting section?", "navigate_help"),
+    ("I want to check vendor list", "navigate_help"),
+    ("Help me reach the dashboard", "navigate_help"),
+    ("Go to the Purchase module", "navigate_help"),
+    ("How do I access product variants?", "navigate_help"),
+    ("Show me the main menu", "navigate_help"),
+    ("Take me to invoices", "navigate_help"),
+    # find_by_partner
+    ("List all orders from supplier ABC Corp", "find_by_partner"),
+    ("Show purchase orders for vendor XYZ", "find_by_partner"),
+    ("Find orders for customer John Doe", "find_by_partner"),
+    ("Display sales orders for Glico company", "find_by_partner"),
+    ("Show me all POs from supplier M&B", "find_by_partner"),
+    ("List sales orders made for customer Peter", "find_by_partner"),
+    ("Orders placed by vendor Johnson Ltd?", "find_by_partner"),
+    ("What orders were created for client ABC?", "find_by_partner"),
+    ("Find every order associated with customer Y", "find_by_partner"),
+    ("Show all past orders for supplier Glico", "find_by_partner"),
+    ("Search purchase history from vendor Hello Co.", "find_by_partner"),
+    ("Give me sales orders linked to customer Alice", "find_by_partner"),
+    ("Check orders involving vendor SupplyChain Inc", "find_by_partner"),
+    ("Purchase orders from Bảo Tín company", "find_by_partner"),
+    ("Get list of orders from buyer Cường Hưng", "find_by_partner"),
 ]
 
 # Split data
@@ -84,7 +149,7 @@ pipeline = Pipeline([
     ('classifier', StackingClassifier(
         estimators=[
             ('lr', LogisticRegression(max_iter=1000)),
-            ('svc', LinearSVC()),
+            ('svc', SVC(kernel='linear', probability=True)),
             ('rf', RandomForestClassifier(n_estimators=100)),
         ],
         final_estimator=LogisticRegression(max_iter=1000),
