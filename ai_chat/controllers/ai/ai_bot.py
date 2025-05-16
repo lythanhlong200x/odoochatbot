@@ -3,19 +3,22 @@ import warnings
 import json
 from odoo import fields
 from odoo import SUPERUSER_ID
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import logging
 import re
+
 _logger = logging.getLogger(__name__)
 
 import asyncio
-
+from datetime import datetime
 from odoo.api import Environment
 from odoo.modules.registry import Registry
 import requests
 import os
 import joblib
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PKL_PATH = os.path.join(BASE_DIR, "static", "data", "intent_classifier_advanced.pkl")
 
@@ -23,12 +26,14 @@ print("Đang load file tại:", PKL_PATH)
 # Tải mô hình đã huấn luyện
 model = joblib.load(PKL_PATH)
 
+
 def predict_order_type(message):
     """
     Dự đoán loại đơn hàng từ câu hỏi của người dùng.
     """
     prediction = model.predict([message])
     return prediction[0]
+
 
 def build_prompt(message):
     print("build_prompt was called")
@@ -81,7 +86,7 @@ def build_prompt(message):
             "No explanation. No formatting. No markdown.\n"
         )
         return hidden_instruction + message
-    if intent == "find_by_partner":
+    elif intent == "find_by_partner":
         hidden_instruction = (
             "You are an Odoo assistant.\n"
             "The user wants to search for orders by customer name.\n"
@@ -90,8 +95,23 @@ def build_prompt(message):
             "No explanation. No formatting. No markdown.\n"
         )
         return hidden_instruction + message
+    elif intent == "create_field_service":
+        hidden_instruction = (
+            "You are an Odoo assistant.\n"
+            "If the user wants to create a Field Service task, respond ONLY with a clean JSON in this format:\n"
+            "{\n"
+            '  "customer_id": "Customer name",\n'
+            '  "activity_type": "Installation" | "Maintenance" | ..., \n'
+            '  "assigned_to": "User login or name",\n'
+            '  "planned_date": "YYYY-MM-DD"\n'
+            "}\n"
+            "Use defaults: if assigned_to is missing, set to current user; if planned_date is missing, leave blank or null.\n"
+            "Do not include extra text or markdown—only the JSON object.\n"
+        )
+        return hidden_instruction + message
     else:
         return message
+
 
 # endregion
 def process_order_response(response_text):
@@ -123,21 +143,22 @@ def process_order_response(response_text):
         pass
     return None
 
+
 def process_purchase_response(response_text):
     # In ra debug tương tự
     text = response_text if isinstance(response_text, str) else \
-        response_text.get('candidates',[{}])[0]\
-                     .get('content',{})\
-                     .get('parts',[{}])[0]\
-                     .get('text','')
-    cleaned = text.replace('```json\n','').replace('```','')
+        response_text.get('candidates', [{}])[0] \
+            .get('content', {}) \
+            .get('parts', [{}])[0] \
+            .get('text', '')
+    cleaned = text.replace('```json\n', '').replace('```', '')
     data = json.loads(cleaned)
     print(f"Parsed purchase data: {data}")
-    if all(k in data for k in ("supplier_id","product_ids","quantities")):
+    if all(k in data for k in ("supplier_id", "product_ids", "quantities")):
         return {
             "supplier_id": data["supplier_id"],
-            "product_ids":  data["product_ids"],
-            "quantities":   data["quantities"],
+            "product_ids": data["product_ids"],
+            "quantities": data["quantities"],
         }
     return None
 
@@ -152,7 +173,8 @@ def clean_response_text(response_text):
     try:
         # Nếu là dict (kiểu response chuẩn từ Gemini)
         if isinstance(response_text, dict):
-            response_text = response_text.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            response_text = response_text.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get(
+                'text', '')
 
         # Xử lý markdown và ký tự thừa
         cleaned = response_text.strip()
@@ -169,6 +191,57 @@ def clean_response_text(response_text):
         return ""
 
 
+def process_field_service_response(response_text, env):
+    """
+    Làm sạch và parse response từ Gemini cho Field Service.
+    Tự động tìm project tương ứng với activity_type.
+    Trả về dict: customer_name, activity_type, assigned_to, planned_date, project_id
+    """
+    try:
+        # B1: Trích xuất text từ response
+        text = response_text if isinstance(response_text, str) else \
+            response_text.get('candidates', [{}])[0] \
+                .get('content', {}) \
+                .get('parts', [{}])[0] \
+                .get('text', '')
+
+        # B2: Loại bỏ markdown nếu có
+        cleaned = text.replace('```json\n', '').replace('```', '').strip()
+
+        # B3: Parse JSON
+        data = json.loads(cleaned)
+
+        # B4: Kiểm tra trường bắt buộc
+        if not all(k in data for k in ("customer_id", "activity_type")):
+            return None
+
+        # B5: Gán mặc định nếu thiếu
+        assigned_to = data.get("assigned_to") or Nonecd
+        planned_date = data.get("planned_date")
+
+        if planned_date:
+            try:
+                planned_date = datetime.fromisoformat(planned_date).date().isoformat()
+            except ValueError:
+                planned_date = None
+
+        # B6: Tìm project theo activity_type
+        activity_type = data["activity_type"]
+        project = env["project.project"].sudo().search([("name", "ilike", activity_type)], limit=1)
+        project_id = project.id if project else None
+
+        return {
+            "customer_name": data["customer_id"],
+            "activity_type": activity_type,
+            "assigned_to": assigned_to,
+            "planned_date": planned_date,
+            "project_id": project_id,
+        }
+
+    except Exception:
+        return None
+
+
 class AiBot:
     AGENT_NAME = "odoo_ai_bot"
     AGENT_INSTRUCTIONS = """
@@ -183,8 +256,6 @@ class AiBot:
         self.gemini_api_key = "AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
         self.gemini_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
 
-
-
     def _send_stream_to_client(self, content):
         try:
             with Registry(self.env.cr.dbname).cursor() as cr:
@@ -194,7 +265,6 @@ class AiBot:
         except Exception as e:
             _logger.error("Error sending stream to client: %s", e)
             return False
-
 
     def call_gemini_api(self, message, history):
         """
@@ -260,6 +330,12 @@ class AiBot:
                         purchase_order_params["product_ids"],
                         purchase_order_params["quantities"],
                     )
+            elif intent == "create_field_service":
+                print("create_field_service was called")
+                fs_params = process_field_service_response(data, self.env)
+                if fs_params:
+                    return self.create_field_service(**fs_params)
+                return "❌ Failed to process Field Service data."
             elif intent == "check_stock":
                 return self.check_product_stock(keyword)
             elif intent == "find_by_number":
@@ -267,7 +343,7 @@ class AiBot:
                 try:
                     # Tải dữ liệu JSON từ response đã được "clean"
                     cleaned_text = clean_response_text(data)
-                      # Debug xem dữ liệu trả về có đúng định dạng không
+                    # Debug xem dữ liệu trả về có đúng định dạng không
                     cleaned_text = cleaned_text.replace("{", "{\"").replace("}", "\"}").replace(": ", "\": \"").replace(
                         ",", "\",\"")
 
@@ -379,7 +455,8 @@ class AiBot:
             order_model = "sale.order" if order_type == "sale" else "purchase.order"
 
             # Dùng SUPERUSER_ID để vượt quyền, rồi thêm context đúng công ty vào model, không phải env
-            order_model_obj = self.env[order_model].sudo().with_user(SUPERUSER_ID).with_context(force_company=company_id)
+            order_model_obj = self.env[order_model].sudo().with_user(SUPERUSER_ID).with_context(
+                force_company=company_id)
             _logger.info("Creating %s for partner %s in company %s", order_model, customer.id, company_id)
             # Tạo đơn hàng
             order = order_model_obj.create({
@@ -408,6 +485,35 @@ class AiBot:
 
     def create_purchase_order(self, supplier_name, product_names, quantities):
         return self.create_sales_order(supplier_name, product_names, quantities, order_type="purchase")
+
+    def create_field_service(self, customer_name, activity_type, assigned_to, planned_date, project_id):
+        ...
+        # 1) Tìm customer
+        partner = self.get_record_by_name("res.partner", "name", customer_name)
+        if not partner:
+            return f"❌ Customer '{customer_name}' not found."
+
+        # 2) Tìm user để gán
+        user = None
+        if assigned_to:
+            user = self.get_record_by_name("res.users", "login", assigned_to) or \
+                   self.get_record_by_name("res.users", "name", assigned_to)
+        if not user:
+            user = self.env.user
+
+        # 3) Tạo bản ghi field.service (giả sử model là field.service)
+        try:
+            fs = self.env["project.task"].sudo().create({
+                "name": f"Field Service for {partner.name}",
+                "partner_id": partner.id,
+                "user_ids": [(6, 0, [user.id])],
+                "planned_date_begin": planned_date or False,
+                "project_id": project_id,
+                "description": f"Activity Type: {activity_type}",
+            })
+            return f"✅ Field Service #{fs.name} created: Customer={partner.name}, Activity={activity_type}, Assigned={user.login}, Date={planned_date or '—'}"
+        except Exception as e:
+            return f"❌ Error creating Field Service: {e}"
 
     def check_product_stock(self, product_name):
         """
@@ -466,6 +572,7 @@ class AiBot:
                 f"   📌 Status: {r.state}\n"
             )
         return result
+
     def run_async_function(self, func_to_run, *args):
         new_loop = asyncio.new_event_loop()
         try:
