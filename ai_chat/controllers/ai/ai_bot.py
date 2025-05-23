@@ -216,7 +216,7 @@ def process_field_service_response(response_text, env):
             return None
 
         # B5: Gán mặc định nếu thiếu
-        assigned_to = data.get("assigned_to") or Nonecd
+        assigned_to = data.get("assigned_to") or None
         planned_date = data.get("planned_date")
 
         if planned_date:
@@ -245,7 +245,7 @@ def process_field_service_response(response_text, env):
 class AiBot:
     AGENT_NAME = "odoo_ai_bot"
     AGENT_INSTRUCTIONS = """
-        Your name is Frodoo. You are a helpful AI assistant.
+        Your name is Decathlon AI. You are a helpful AI assistant.
     """
 
     def __init__(self, env: Environment | None):
@@ -516,6 +516,7 @@ class AiBot:
             return f"❌ Error creating Field Service: {e}"
 
     def check_product_stock(self, product_name):
+        print('check_product_stock')
         """
         Check the current on-hand and forecasted stock for a given product name.
         Returns a formatted string with both quantities.

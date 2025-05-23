@@ -90,7 +90,7 @@ export class AiSidebar extends Component {
             })
             .withPersonaOptions({
                 assistant: {
-                    name: 'Frodoo',
+                    name: 'Decathlon Assistant',
                     avatar: '/ai_chat/static/images/frodoo.png',
                     tagline: 'Your helpful AI assistant!'
                 },
