@@ -233,6 +233,19 @@ def process_field_service_response(response_text, env):
 
     except Exception:
         return None
+
+def check_required_fields(data_dict, required_fields):
+    """
+    Check if all required fields exist and are not empty in the input data.
+    Returns (True, []) if valid; otherwise, (False, [list of missing fields])
+    """
+    missing = []
+    for field in required_fields:
+        if field not in data_dict or not data_dict[field]:
+            missing.append(field)
+    return (len(missing) == 0), missing
+
+
 GEMINI_API_KEY="AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
 
 class AiBot:
