@@ -117,13 +117,6 @@ def build_prompt(message):
 def process_order_response(response_text):
     print(f"Response text: {response_text}")  # In ra toàn bộ response
     try:
-        # Trích xuất phần 'text' trong response (cleaning)
-        if isinstance(response_text, dict):
-            response_text = response_text.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get(
-                'text', '')
-
-        print(f"Cleaned response text: {response_text}")  # In ra text đã được làm sạch
-
         # Loại bỏ markdown ` ```json` và ` ``` `
         cleaned_text = response_text.replace('```json\n', '').replace('```', '')
 
@@ -240,7 +233,7 @@ def process_field_service_response(response_text, env):
 
     except Exception:
         return None
-
+GEMINI_API_KEY="AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
 
 class AiBot:
     AGENT_NAME = "odoo_ai_bot"
@@ -253,7 +246,7 @@ class AiBot:
             raise Exception("Environment is not set.")
         self.env = env
 
-        self.gemini_api_key = "AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.gemini_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
 
     def _send_stream_to_client(self, content):
@@ -391,15 +384,22 @@ class AiBot:
                     return f"Failed to parse find_by_partner data: {e}"
 
             if "candidates" in data and len(data["candidates"]) > 0:
-                candidate = data["candidates"][0]
-                if "content" in candidate and "parts" in candidate["content"] and len(
-                        candidate["content"]["parts"]) > 0:
-                    base_text = candidate["content"]["parts"][0]["text"]
-                    if order_result:
-                        base_text += f"\n\n✅ {order_result}"
+                # If it's a recognized order intent, return a simplified message
+                if intent == "create_sales_order":
+                    final_text = "✅ Processing Sales Order..."
+                elif intent == "create_purchase_order":
+                    final_text = "✅ Processing Purchase Order..."
+                elif intent == "create_field_service" and isinstance(order_result, str):
+                    final_text = order_result  # This already returns a formatted status string
+                elif order_result:
+                    final_text = f"✅ {order_result}"
+                else:
+                    # Default fallback: return Gemini's raw response if it's not an order
+                    candidate = data["candidates"][0]
+                    final_text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "No response")
 
-                    self.save_chat_history(self.env.uid, message, base_text)
-                    return base_text
+                self.save_chat_history(self.env.uid, message, final_text)
+                return final_text
             return "No response from Gemini API."
         except Exception as e:
             _logger.error("Error calling Gemini API: %s", e)
