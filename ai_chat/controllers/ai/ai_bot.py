@@ -117,9 +117,15 @@ def build_prompt(message):
 def process_order_response(response_text):
     print(f"Response text: {response_text}")  # In ra toàn bộ response
     try:
+        # Trích xuất phần 'text' trong response (cleaning)
+        if isinstance(response_text, dict):
+            response_text = response_text.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get(
+                'text', '')
+
+        print(f"Cleaned response text: {response_text}")  # In ra text đã được làm sạch
+
         # Loại bỏ markdown ` ```json` và ` ``` `
         cleaned_text = response_text.replace('```json\n', '').replace('```', '')
-
         # Parse chuỗi JSON đã làm sạch
         data = json.loads(cleaned_text)
         print(f"Parsed data: {data}")  # In ra dữ liệu JSON đã parse
@@ -234,19 +240,6 @@ def process_field_service_response(response_text, env):
     except Exception:
         return None
 
-def check_required_fields(data_dict, required_fields):
-    """
-    Check if all required fields exist and are not empty in the input data.
-    Returns (True, []) if valid; otherwise, (False, [list of missing fields])
-    """
-    missing = []
-    for field in required_fields:
-        if field not in data_dict or not data_dict[field]:
-            missing.append(field)
-    return (len(missing) == 0), missing
-
-
-GEMINI_API_KEY="AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
 
 class AiBot:
     AGENT_NAME = "odoo_ai_bot"
@@ -259,7 +252,7 @@ class AiBot:
             raise Exception("Environment is not set.")
         self.env = env
 
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        self.gemini_api_key = "AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
         self.gemini_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
 
     def _send_stream_to_client(self, content):
@@ -397,22 +390,23 @@ class AiBot:
                     return f"Failed to parse find_by_partner data: {e}"
 
             if "candidates" in data and len(data["candidates"]) > 0:
-                # If it's a recognized order intent, return a simplified message
-                if intent == "create_sales_order":
-                    final_text = "✅ Processing Sales Order..."
+                candidate = data.get("candidates", [{}])[0]
+                response_text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
+                # Tạo phần trả lời hiển thị gọn (KHÔNG xử lý lại đơn hàng ở đây!)
+                if order_result:
+                    base_text = order_result  # full message with name + link
+                elif intent == "create_sales_order":
+                    base_text = "❌ Failed to create Sales Order."
                 elif intent == "create_purchase_order":
-                    final_text = "✅ Processing Purchase Order..."
-                elif intent == "create_field_service" and isinstance(order_result, str):
-                    final_text = order_result  # This already returns a formatted status string
-                elif order_result:
-                    final_text = f"✅ {order_result}"
+                    base_text = "❌ Failed to create Purchase Order."
+                elif intent == "create_field_service":
+                    base_text = "❌ Failed to create Field Service task."
                 else:
-                    # Default fallback: return Gemini's raw response if it's not an order
-                    candidate = data["candidates"][0]
-                    final_text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "No response")
+                    base_text = response_text  # fallback from Gemini
 
-                self.save_chat_history(self.env.uid, message, final_text)
-                return final_text
+                self.save_chat_history(self.env.uid, message, base_text)
+                return base_text
+
             return "No response from Gemini API."
         except Exception as e:
             _logger.error("Error calling Gemini API: %s", e)
@@ -487,11 +481,19 @@ class AiBot:
                     return f"Product '{prod_name}' not found"
                 field = 'product_uom_qty' if order_type == "sale" else 'product_qty'
                 order_lines.append((0, 0, {'product_id': product.id, field: qty}))
-
+            if not order_lines:
+                order.unlink()  # Xóa đơn đã tạo nếu không có dòng
+                return "❌ No valid products found to add to the order."
             # Ghi lại các dòng đơn hàng vào đơn hàng
             order.write({'order_line': order_lines})
             model_label = "Sales Order" if order_type == "sale" else "Purchase Order"
-            return f"✅ {model_label} {order.name} created successfully."
+            base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+            url = f"{base_url}/web#id={order.id}&model={order._name}&view_type=form"
+            return (
+                f"✅ {model_label} {order.name} created successfully.\n"
+                f"🔗 [View this order]({url})\n"
+                f"👉 Open the link for details.\n"
+            )
         except Exception as e:
             print(f"Error creating sales order: {e}")
             return f"Error: {e}"
@@ -524,7 +526,16 @@ class AiBot:
                 "project_id": project_id,
                 "description": f"Activity Type: {activity_type}",
             })
-            return f"✅ Field Service #{fs.name} created: Customer={partner.name}, Activity={activity_type}, Assigned={user.login}, Date={planned_date or '—'}"
+            base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+            url = f"{base_url}/web#id={fs.id}&model=project.task&view_type=form"
+
+            return (
+                f"✅ Field Service #{fs.name} created successfully.\n"
+                f"👤 Customer: {partner.name}\n"
+                f"🛠️ Activity: {activity_type}\n"
+                f"📅 Date: {planned_date or '—'}\n"
+                f"🔗 [View Field Service]({url})"
+            )
         except Exception as e:
             return f"❌ Error creating Field Service: {e}"
 
@@ -546,10 +557,14 @@ class AiBot:
         on_hand = product.qty_available
         forecasted = product.virtual_available
 
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+        product_url = f"{base_url}/web#id={product.id}&model=product.product&view_type=form"
+
         return (
             f"📦 Product: {product.name}\n"
             f"  • On Hand: {on_hand:.2f}\n"
             f"  • Forecasted: {forecasted:.2f}\n"
+            f"🔗 [View product]({product_url})"
         )
 
     def find_by_number(self, model, number):
@@ -558,12 +573,16 @@ class AiBot:
         if not rec:
             return f"❌ No order found with number: {number}"
 
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+        url = f"{base_url}/web#id={rec.id}&model={rec._name}&view_type=form"
+
         return (
                 f"📦 Order: {rec.name}\n"
                 f"👤 Customer: {rec.partner_id.name}\n"
                 f"🗓️ Date: {rec.date_order.strftime('%Y-%m-%d %H:%M') if rec.date_order else 'N/A'}\n"
                 f"💰 Total: {rec.amount_total:.2f} {rec.currency_id.name}\n"
                 f"📌 Status: {rec.state}\n"
+                f"🔗 [View order]({url})\n"
                 f"🛒 Products:\n" +
                 "\n".join(
                     f"  - {line.product_id.display_name} x {line.product_uom_qty} ({line.price_unit:.2f} {rec.currency_id.name}/unit)"
@@ -572,19 +591,42 @@ class AiBot:
         )
 
     def find_by_partner(self, model, partner_name):
-        Order = self.env[model].sudo()
-        recs = Order.search([("partner_id.name", "ilike", partner_name)], order="date_order desc", limit=10)
-        if not recs:
-            return f"❌ No orders found for partner: {partner_name}"
+        partner = self.env["res.partner"].sudo().search([("name", "ilike", partner_name)], limit=1)
+        if not partner:
+            return f"❌ Customer '{partner_name}' not found."
 
-        result = f"📋 Latest orders for '{partner_name}':\n"
+        Order = self.env[model].sudo()
+        recs = Order.search([("partner_id", "=", partner.id)], order="date_order desc", limit=10)
+        if not recs:
+            return f"❌ No orders found for partner: {partner.name}"
+
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+
+        if model == "sale.order":
+            action_id = self.env.ref("sale.action_orders").id
+            menu_id = self.env.ref("sale.menu_sale_order").id
+        elif model == "purchase.order":
+            action_id = self.env.ref("purchase.purchase_form_action").id
+            menu_id = self.env.ref("purchase.menu_purchase_order").id
+        else:
+            return f"❌ Unsupported model: {model}"
+
+        # Mở list view không filter sẵn
+        list_url = f"{base_url}/web#action={action_id}&model={model}&view_type=list&menu_id={menu_id}"
+
+        result = f"📋 Latest orders for '{partner.name}':\n"
         for r in recs:
             result += (
                 f"\n🔹 Order: {r.name}\n"
-                f"   🗓️ Date: {r.date_order.strftime('%Y-%m-%d') if r.date_order else 'N/A'}\n"
+                f"   📅 Date: {r.date_order.strftime('%Y-%m-%d') if r.date_order else 'N/A'}\n"
                 f"   💰 Total: {r.amount_total:.2f} {r.currency_id.name}\n"
                 f"   📌 Status: {r.state}\n"
             )
+
+        result += (
+            f"\n🔗 [Open Sales Orders List View]({list_url})\n"
+            f"👉 Tip: Use filter `Customer = {partner.name}` for better results."
+        )
         return result
 
     def run_async_function(self, func_to_run, *args):
