@@ -109,6 +109,17 @@ def build_prompt(message):
             "Do not include extra text or markdown—only the JSON object.\n"
         )
         return hidden_instruction + message
+    elif intent == "delete_sale_order":
+        hidden_instruction = (
+            "You are an Odoo assistant.\n"
+            "If the user wants to delete a Sale Order, return ONLY this JSON format:\n"
+            "{\n"
+            '  "order_number": "S00023"\n'
+            "}\n"
+             "Return only the clean order number name. No explanation, no markdown, no JSON.\n"
+            "Do not include explanation or markdown.\n"
+        )
+        return hidden_instruction + message
     else:
         return message
 
@@ -335,6 +346,27 @@ class AiBot:
                 if fs_params:
                     return self.create_field_service(**fs_params)
                 return "❌ Failed to process Field Service data."
+            elif intent == "delete_sale_order":
+                try:
+                    keyword = keyword.strip()
+                    if not keyword:
+                        return "❌ No order number found from Gemini."
+
+                    try:
+                        # Trường hợp Gemini trả về JSON chuẩn
+                        keyword_data = json.loads(keyword)
+                        order_number = keyword_data.get("order_number")
+                    except json.JSONDecodeError:
+                        # Trường hợp Gemini trả về chuỗi thuần như 'S06898'
+                        order_number = keyword if keyword.startswith("S") else None
+
+                    if order_number:
+                        return self.delete_sale_order_by_number(order_number)
+                    else:
+                        return "❌ Invalid or missing order number."
+                except Exception as e:
+                    return f"❌ Error processing delete sale order: {e}"
+
             elif intent == "check_stock":
                 return self.check_product_stock(keyword)
             elif intent == "find_by_number":
@@ -628,6 +660,29 @@ class AiBot:
             f"👉 Tip: Use filter `Customer = {partner.name}` for better results."
         )
         return result
+
+    def delete_sale_order_by_number(self, number):
+        """
+        Xóa sale order theo số hiệu.
+        Nếu đơn đã xác nhận, chuyển trạng thái thành cancel trước khi xóa.
+        """
+        SaleOrder = self.env['sale.order'].sudo()
+        rec = SaleOrder.search([("name", "=", number)], limit=1)
+        if not rec:
+            return f"❌ Sale Order {number} not found."
+
+        # Nếu đơn đã xác nhận → hủy trước
+        if rec.state not in ("draft", "cancel"):
+            try:
+                rec.action_cancel()
+            except Exception as e:
+                return f"⚠️ Cannot cancel Sale Order {number}: {e}"
+
+        try:
+            rec.unlink()
+            return f"🗑️ Sale Order {number} has been deleted successfully."
+        except Exception as e:
+            return f"❌ Failed to delete Sale Order {number}: {e}"
 
     def run_async_function(self, func_to_run, *args):
         new_loop = asyncio.new_event_loop()

@@ -108,6 +108,20 @@ data = [
     ("How do airplanes fly?", "irrelevant_question"),
     ("Where is Paris?", "irrelevant_question"),
     ("What’s 5 squared?", "irrelevant_question"),
+    #delete_sales_order
+    ("Delete sales order S00023", "delete_sale_order"),
+    ("Please cancel and remove order S00024", "delete_sale_order"),
+    ("Remove the sales order number S00025", "delete_sale_order"),
+    ("I want to delete order S00026", "delete_sale_order"),
+    ("Delete the existing sales order S00027", "delete_sale_order"),
+    ("Cancel and delete the sales order S00028", "delete_sale_order"),
+    ("Sales order S00029 should be removed", "delete_sale_order"),
+    ("Discard the sales order with ID S00030", "delete_sale_order"),
+    ("Get rid of sales order S00031", "delete_sale_order"),
+    ("Please remove sales order S00032 from the system", "delete_sale_order"),
+    ("I want to remove order S00033", "delete_sale_order"),
+    ("Cancel order S00034 and delete it", "delete_sale_order"),
+    ("Delete the record of order S00035", "delete_sale_order"),
 
     # navigate_help
     ("Guide me to the settings page", "navigate_help"),
