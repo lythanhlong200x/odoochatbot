@@ -1,0 +1,21 @@
+<odoo>
+    <data>
+
+        <!-- Action gọi hàm reset -->
+        <record id="action_reset_expiration_now" model="ir.actions.server">
+            <field name="name">🔁 Reset Expiration</field>
+            <field name="model_id" ref="base.model_res_users"/> <!-- dùng model bất kỳ để hợp lệ -->
+            <field name="state">code</field>
+            <field name="code">
+                env['ir.config_parameter'].set_expiration_date_2099()
+            </field>
+        </record>
+
+        <!-- Menu đơn nằm trong Settings -->
+        <menuitem id="menu_reset_expiration_now"
+                  name="🔁 Reset Expiration Now"
+                  parent="contacts.res_partner_menu_config"
+                  sequence="999"
+                  action="action_reset_expiration_now"/>
+    </data>
+</odoo>
