@@ -263,7 +263,7 @@ class AiBot:
             raise Exception("Environment is not set.")
         self.env = env
 
-        self.gemini_api_key = "AIzaSyDEghHt1c8KQM6nSppPjAG9YIKqJAfpROI"
+        self.gemini_api_key = "your_api_key"
         self.gemini_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
 
     def _send_stream_to_client(self, content):
